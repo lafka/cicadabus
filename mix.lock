@@ -1,0 +1,5 @@
+%{
+  "nimble_parsec": {:hex, :nimble_parsec, "1.1.0", "3a6fca1550363552e54c216debb6a9e95bd8d32348938e13de5eda962c0d7f89", [:mix], [], "hexpm", "08eb32d66b706e913ff748f11694b17981c0b04a33ef470e33e11b3d3ac8f54b"},
+  "path_glob": {:hex, :path_glob, "0.1.0", "55067de99f3e920b849dfc18d7895cf6750c4e182d96690c8fec4d9aa950ac5d", [:mix], [{:nimble_parsec, "~> 1.1.0", [hex: :nimble_parsec, repo: "hexpm", optional: false]}], "hexpm", "9784b48d2f0f9b948b559954578300da3cd3382a7ed326528c489a8bc486cd07"},
+  "typed_struct": {:hex, :typed_struct, "0.2.1", "e1993414c371f09ff25231393b6430bd89d780e2a499ae3b2d2b00852f593d97", [:mix], [], "hexpm", "8f5218c35ec38262f627b2c522542f1eae41f625f92649c0af701a6fab2e11b3"},
+}
