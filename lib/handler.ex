@@ -277,10 +277,37 @@ defmodule CicadaBus.Handler do
 
 
   @doc """
+  Signal that the event was dd by subscriber and can be removed
+  """
+  def ack(ref, ackref, pid, _opts \\ []) do
+    send pid, {ref, ackref, :ack}
+    :ok
+  end
+
+
+  @doc """
+  Signal that the event was rejected by subscriber and should not be retried
+  """
+  def reject(ref, ackref, pid, opts \\ []) do
+    send pid, {ackref, ref, :reject}
+    :ok
+  end
+
+
+  @doc """
   Start a bare handler
   """
   def start_link(topic, opts \\ []) do
-    {opts, genopts} = Keyword.split(opts, ~w(module prefix supervisor)a)
+    valid_opts = ~w(guarantee acknowledge prefix module supervisor name)a
+
+    invalid = Keyword.drop(opts, valid_opts)
+    if [] != invalid do
+        keys = Keyword.keys(invalid)
+        raise ArgumentError, message: "invalid keys '#{Enum.join(keys, "', '")}'"
+    end
+
+    {opts, genopts} = Keyword.split(opts, valid_opts)
+
     GenServer.start_link(__MODULE__, [topic | opts], genopts)
   end
 
@@ -404,6 +431,8 @@ defmodule CicadaBus.Handler do
         # The current event we're processing
         event: {nil, _delivered = [], _pending = []},
         module: module,
+        acknowledge: args[:acknowledge],
+        guarantee: args[:guarantee],
         # The total queue
         queue: :pqueue.new(),
         subscribers: subworkers
@@ -476,8 +505,27 @@ defmodule CicadaBus.Handler do
     {:noreply, state}
   end
 
+  def handle_info({subref, ackref, :ack}, state) do
+    nextstate = on_ack(subref, ackref, state)
+    {:noreply, nextstate}
+  end
+  def handle_info({_subref, _ackref, :reject}, state), do: {:noreply, state}
+
+  defp set_default_guarantee(%{meta: %{guarantee: nil}} = ev, guarantee) do
+    %{ev | meta: Map.put(ev.meta, :guarantee, guarantee)}
+  end
+  defp set_default_guarantee(ev, _), do: ev
+
+  defp set_default_ack(%{acknowledge: nil} = ev, ack?) do
+    %{ev | acknowledge: ack?}
+  end
+  defp set_default_ack(ev, _), do: ev
 
   defp on_event(%Event{priority: priority} = ev, state) do
+    ev = ev
+    |> set_default_guarantee(state.guarantee)
+    |> set_default_ack(state.acknowledge)
+
     cond do
       not state.match.(ev, []) ->
         Logger.debug("drop #{Enum.join(ev.topic, "/")} from unnmatched '#{state.topic}'")
@@ -489,7 +537,41 @@ defmodule CicadaBus.Handler do
 
       true ->
         Logger.debug("accept #{Enum.join(ev.topic, "/")} on '#{state.topic}' -> queue")
-        {:ok, queue_event({priority, ev}, state)}
+        {:ok, queue_event(ev, state)}
+    end
+  end
+
+  defp on_ack(_subref, _ackref, %{event: {_ev, _delivered, []}} = s), do: s
+  defp on_ack(subref, ackref, %{event: {_, _, _} = ev} = s) do
+    {_, _, pending} = newev =
+      case ev do
+        {%{acknowledge: ^ackref} = ev, delivered, pending} ->
+          if Enum.member? pending, subref do
+            {ev, delivered ++ [subref], pending -- [subref]}
+          else
+            ev
+          end
+
+        ^ev ->
+          ev
+      end
+
+    # Next event
+    if [] == pending do
+      process_next_from_queue(%{s | event: {nil, [], []}})
+    else
+      %{s | event: newev}
+    end
+  end
+
+  defp process_next_from_queue(state) do
+    case :pqueue.out(state.queue) do
+      {:empty, _queue} ->
+        state
+
+      {{:value, ev}, queue} ->
+        {_res, nextstate} = on_event(ev, %{state | queue: queue})
+        nextstate
     end
   end
 
@@ -508,8 +590,8 @@ defmodule CicadaBus.Handler do
 
 
   # keep a queue of events we expect to process soon
-  defp queue_event({priority, event}, %{queue: queue} = state) do
-    %{state | queue: :pqueue.in(event, priority, queue)}
+  defp queue_event(event, %{queue: queue} = state) do
+    %{state | queue: :pqueue.in(event, event.priority, queue)}
   end
 
 
@@ -541,78 +623,76 @@ defmodule CicadaBus.Handler do
     new_targets = Map.drop(state.subscribers, delivered ++ pending)
     Logger.debug("output  #{Enum.join(input.topic, "/")} to #{map_size new_targets} subscriber")
 
-    newly_delivered =
+    # Simple delivery via send/2
+    event_ref = make_ref()
+    awaiting_confirmation =
       for {ref, target} <- new_targets do
-        event_ref = make_ref()
 
         case target do
           %{pid: pid} when is_pid(pid) ->
             Logger.debug("deliver #{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
             send(pid, {ref, {:event, event_ref, input}})
-            {ref, Process.alive?(pid), event_ref}
+            {ref, event_ref}
         end
       end
 
-    newly_delivered =
-      newly_delivered
-      |> ensure_liveness()
-      |> maybe_await_ack(input)
+
+    # Process all the handlers, there's not requirement for any ack
+    # from these as they are run in process.
+    delivered =
+        (fn module, delivered->
+          handlers = for {:handlers, [v]} <- module.__info__(:attributes), do: v
+
+          uncalled_handlers  = handlers -- delivered
+
+          for {_, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
+            apply mod, fnname, [input, []]
+          end
+
+          delivered ++ uncalled_handlers
+        end).(state.module, delivered)
 
     guarantee = input.meta.guarantee
+    ack? = input.acknowledge
 
-    handlers = for {:handlers, [v]} <- state.module.__info__(:attributes), do: v
+    delivered =
+      case {ack?, guarantee} do
+        # No ack, then we assume nothing needs to be done
+        {false, _} ->
+          awaiting_confirmation ++ delivered
 
-    # handlers = state.module.__info__(:attributes)[:handlers] || []
-    uncalled_handlers  = handlers -- delivered
+        {nil, _} ->
+          awaiting_confirmation ++ delivered
 
-    for {_, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
-      apply mod, fnname, [input, []]
-    end
+        # We want ACK but no delivery guarantee so we don't care
+        {_, nil} ->
+          awaiting_confirmation ++ delivered
 
-    delivered = newly_delivered ++ delivered ++ uncalled_handlers
+        # We want ACK from atleast one, maybe more..
+        {x, _} when x == true or is_reference(x)->
+          delivered
+      end
+
+    Logger.error "message-guarantee #{guarantee}, ack? #{inspect ack?}"
 
     cond do
       nil == guarantee ->
-        {nil, [], []}
+        {nil, nil, [], []}
 
-      # At least one was delivered
+      # At least one was delivered, works for :any without
       :any == guarantee and [] != delivered ->
-        {nil, [], []}
+        {nil, nil, [], []}
 
+        # We have a guarantee which has not been fulfilled. Wait for input
+        # in the form of :DOWN messages, acknolwedgements or rejections
       true ->
-        # We've reached here since not all items were delivered. This means the
-        # request must be retried. In the case of a crashed subscriber we don't
-        # need, in case a topic handler crashed it must be retried.
         new_target_keys = Map.keys(new_targets)
-        {input, delivered, (pending ++ new_target_keys) -- delivered}
-    end
-  end
-
-
-  defp ensure_liveness(delivered) do
-    for {subref, true, evref} <- delivered, into: %{}, do: {evref, subref}
-  end
-
-  defp maybe_await_ack(delivered, %Event{acknowledge: true} = ev) do
-    {:ok, tref} = :timer.send_after(ev.meta.ttl, :cancel_ack_wait)
-
-    delivered = maybe_await_ack2(delivered)
-
-    {:ok, :close} = :timer.cancel(tref)
-    delivered
-  end
-
-  defp maybe_await_ack(delivered, %Event{}), do: Map.values(delivered)
-
-  def maybe_await_ack2(%{} = delivered, acc \\ []) do
-    receive do
-      :cancel_ack_wait ->
-        acc
-
-      {ackref, :ack} ->
-        case delivered[ackref] do
-          nil -> maybe_await_ack2(delivered, acc)
-          ^ackref -> maybe_await_ack2(Map.drop(delivered, [ackref]), [ackref | acc])
+        new_pending = (pending ++ new_target_keys) -- delivered
+        Logger.debug("Total of  #{length(delivered)}/#{length(new_pending)} acknowledged")
+        if ack? do
+          {%{input | acknowledge: event_ref}, delivered, new_pending}
+        else
+          {input, delivered, new_pending}
         end
     end
   end

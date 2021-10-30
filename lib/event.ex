@@ -13,8 +13,8 @@ defmodule CicadaBus.Event do
     field(:topic, Handler.topic())
     field(:priority, non_neg_integer(), default: 1000)
     field(:value, term())
-    field(:acknowledge, bool() | non_neg_integer(), default: false)
-    field(:meta, Handler.meta(), default: %{guarantee: nil})
+    field(:acknowledge, bool() | non_neg_integer(), default: nil)
+    field(:meta, Handler.meta(), default: %{guarantee: nil, ttl: 10})
   end
 
   def new(topic, value, opts \\ [])
