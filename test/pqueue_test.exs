@@ -24,7 +24,7 @@ defmodule Tnest.Edge.Bus.PqueueTest do
     refute :pqueue.member(200, queue)
 
     q =
-    Enum.reduce(9..0, queue, fn(v, q) ->
+    Enum.reduce(0..9, queue, fn(v, q) ->
       x = v
       assert {{:value, ^x, ^v}, q} = :pqueue.out_p(q)
       x = x + 10
@@ -54,10 +54,22 @@ defmodule Tnest.Edge.Bus.PqueueTest do
       x = x + 10
 
       assert {{:value, ^x, ^v}, q} = :pqueue.out_p(q)
-      x = x + 10
       q
     end)
 
     assert :pqueue.is_empty(q)
+  end
+
+  test "peek" do
+    queue = Enum.reduce(1..10, :pqueue.new(), fn v, acc -> :pqueue.in(v, v, acc) end)
+
+    empty =
+      Enum.reduce(1..10, queue, fn(v, acc) ->
+        assert {:value, ^v} = :pqueue.peek(acc)
+        {{:value, ^v}, q} = :pqueue.out(acc)
+        q
+      end)
+
+    assert :empty == :pqueue.peek(empty)
   end
 end

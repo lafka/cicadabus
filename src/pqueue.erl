@@ -1,10 +1,11 @@
-%% Copied From https://github.com/rabbitmq/rabbitmq-server/blob/master/deps/rabbit_common/src/priority_queue.erl
+%% Based upon https://github.com/rabbitmq/rabbitmq-server/blob/master/deps/rabbit_common/src/priority_queue.erl
 %%
 %% This Source Code Form is subject to the terms of the Mozilla Public
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
 %% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2021, Olav Frengstad. All rights reserved.
 %%
 
 %% Priority queues have essentially the same interface as ordinary
@@ -22,19 +23,12 @@
 %% module for that, but for efficiency we implement the relevant
 %% functions directly in here, thus saving on inter-module calls and
 %% eliminating a level of boxing.
-%%
-%% When the queue contains items with non-zero priorities, it is
-%% represented as a sorted kv list with the inverted Priority as the
-%% key and an ordinary queue as the value. Here again we use our own
-%% ordinary queue implementation for efficiency, often making recursive
-%% calls into the same function knowing that ordinary queues represent
-%% a base case.
 
 
 -module(pqueue).
 
 -export([new/0, is_queue/1, is_empty/1, len/1, to_list/1, from_list/1,
-         in/2, in/3, out/1, out_p/1, join/2, filter/2, fold/3, highest/1,
+         in/2, in/3, out/1, out_p/1, peek/1, join/2, filter/2, fold/3, highest/1,
          member/2]).
 
 %%----------------------------------------------------------------------------
@@ -56,6 +50,7 @@
 -spec in(any(), priority(), pqueue()) -> pqueue().
 -spec out(pqueue()) -> {empty | {value, any()}, pqueue()}.
 -spec out_p(pqueue()) -> {empty | {value, any(), priority()}, pqueue()}.
+-spec peek(pqueue()) -> empty | {value, any()}.
 -spec join(pqueue(), pqueue()) -> pqueue().
 -spec filter(fun ((any()) -> boolean()), pqueue()) -> pqueue().
 -spec fold
@@ -67,6 +62,27 @@
 
 new() ->
     {queue, [], [], 0}.
+
+
+peek({pqueue, Q}) ->
+    case lists:dropwhile(fun is_empty/1, Q) of
+        [] -> empty;
+        [{_Priority, Head} | _Rest] ->
+            {V, _} = out(Head),
+            V
+        end;
+peek({queue, [], [], 0}) ->
+    empty;
+peek({queue, [V], [], 1}) ->
+    {value, V};
+peek({queue, [_Y|In], [], _Len}) ->
+    [V|_Out] = lists:reverse(In, []),
+    {value, V};
+peek({queue, _In, [V], _Len}) ->
+    {value,V};
+peek({queue, _In, [V|_Out], _Len}) ->
+    {value, V}.
+
 
 is_queue({queue, R, F, L}) when is_list(R), is_list(F), is_integer(L) ->
     true;
@@ -90,7 +106,7 @@ len({pqueue, Queues}) ->
 to_list({queue, In, Out, _Len}) when is_list(In), is_list(Out) ->
     [{0, V} || V <- Out ++ lists:reverse(In, [])];
 to_list({pqueue, Queues}) ->
-    [{maybe_negate_priority(P), V} || {P, Q} <- Queues,
+    [{P, V} || {P, Q} <- Queues,
                                       {0, V} <- to_list(Q)].
 
 from_list(L) ->
@@ -108,7 +124,7 @@ in(X, Priority, _Q = {queue, [], [], 0}) ->
 in(X, Priority, Q = {queue, _, _, _}) ->
     in(X, Priority, {pqueue, [{0, Q}]});
 in(X, Priority, {pqueue, Queues}) ->
-    P = maybe_negate_priority(Priority),
+    P = Priority,
     {pqueue, case lists:keysearch(P, 1, Queues) of
                  {value, {_, Q}} ->
                      lists:keyreplace(P, 1, Queues, {P, in(X, Q)});
@@ -148,7 +164,7 @@ out({pqueue, [{P, Q} | Queues]}) ->
     {R, NewQ}.
 
 out_p({queue, _, _, _}       = Q) -> add_p(out(Q), 0);
-out_p({pqueue, [{P, _} | _]} = Q) -> add_p(out(Q), maybe_negate_priority(P)).
+out_p({pqueue, [{P, _} | _]} = Q) -> add_p(out(Q), P).
 
 add_p(R, P) -> case R of
                    {empty, Q}      -> {empty, Q};
@@ -207,7 +223,7 @@ fold(Fun, Init, Q) -> case out_p(Q) of
 
 highest({queue, [], [], 0})     -> empty;
 highest({queue, _, _, _})       -> 0;
-highest({pqueue, [{P, _} | _]}) -> maybe_negate_priority(P).
+highest({pqueue, [{P, _} | _]}) -> P.
 
 member(_X, {queue, [], [], 0}) ->
     false;
@@ -231,6 +247,3 @@ r2f([],      0) -> {queue, [], [], 0};
 r2f([_] = R, 1) -> {queue, [], R, 1};
 r2f([X,Y],   2) -> {queue, [X], [Y], 2};
 r2f([X,Y|R], L) -> {queue, [X,Y], lists:reverse(R, []), L}.
-
-maybe_negate_priority(infinity) -> infinity;
-maybe_negate_priority(P)        -> -P.
