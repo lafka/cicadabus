@@ -29,7 +29,7 @@ defmodule CicadaBus.NestedTest do
     end
   end
 
-  test "nested", opts do
+  test "nested" do
     ref = make_ref()
 
     {:ok, root} = Root.start_link("**")

@@ -373,7 +373,6 @@ defmodule CicadaBus.Handler do
           {:module, target}
         ]
 
-        pad = String.pad_leading(" ", byte_size(match) + 5)
         cond do
           nil != supervisor ->
             {:ok, pid} = TopicSupervisor.start_child target, {match, opts}, args[:supervisor]
@@ -410,8 +409,6 @@ defmodule CicadaBus.Handler do
               else
                 {target, :start_link, []}
               end
-
-            argstr = a |> inspect |> String.trim("[") |> String.trim("]")
 
             Logger.info("  >> start #{match}, module: #{m}")
             {:ok, pid} = apply m, f, a
@@ -502,14 +499,14 @@ defmodule CicadaBus.Handler do
 
   def handle_info({_fromref, {:event, _ackref, %Event{} = ev}}, state) do
     {_, nextstate} = on_event(ev, state)
-    {:noreply, state}
+    {:noreply, nextstate}
   end
 
   def handle_info({subref, ackref, :ack}, state) do
     nextstate = on_ack(subref, ackref, state)
     {:noreply, nextstate}
   end
-  def handle_info({_subref, _ackref, :reject}, state), do: {:noreply, state}
+
 
   defp set_default_guarantee(%{meta: %{guarantee: nil}} = ev, guarantee) do
     %{ev | meta: Map.put(ev.meta, :guarantee, guarantee)}
@@ -521,7 +518,7 @@ defmodule CicadaBus.Handler do
   end
   defp set_default_ack(ev, _), do: ev
 
-  defp on_event(%Event{priority: priority} = ev, state) do
+  defp on_event(%Event{} = ev, state) do
     ev = ev
     |> set_default_guarantee(state.guarantee)
     |> set_default_ack(state.acknowledge)
@@ -672,8 +669,6 @@ defmodule CicadaBus.Handler do
         {x, _} when x == true or is_reference(x)->
           delivered
       end
-
-    Logger.error "message-guarantee #{guarantee}, ack? #{inspect ack?}"
 
     cond do
       nil == guarantee ->
