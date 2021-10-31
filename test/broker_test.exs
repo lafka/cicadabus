@@ -16,7 +16,7 @@ defmodule CicadaBus.BrokerTest do
     deftopic "match/wildcard/**/tail"
 
 
-    defhandle "inline/**", ev, opts do
+    defhandle "inline/**", ev, _opts do
       case ev.value do
         {pid, ref} ->
           send pid, {ref, :ok, 1}
@@ -27,8 +27,7 @@ defmodule CicadaBus.BrokerTest do
     end
 
 
-    defhandle "inline/**", %{value: {pid, ref}} = ev, _opts do
-      {pid, ref} = ev.value
+    defhandle "inline/**", %{value: {pid, ref}}, _opts do
       send pid, {ref, :ok, 2}
     end
 
@@ -114,7 +113,7 @@ defmodule CicadaBus.BrokerTest do
 
   test "inline handler" do
     {:ok, broker} = Broker.start_link("**")
-    :ok = Broker.input(ev = Event.new("inline/event", {self(), ref = make_ref()}), broker)
+    :ok = Broker.input(Event.new("inline/event", {self(), ref = make_ref()}), broker)
 
     assert_receive {^ref, :ok, 1}
     assert_receive {^ref, :ok, 2}

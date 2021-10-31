@@ -73,26 +73,26 @@ defmodule CicadaBus.HandlerTest do
     {:ok, pid} = Handler.start_link("**", guarantee: :any, acknowledge: true)
 
 
-    :ok = Handler.input(ev1 = Event.new("ack/queue", 1), pid)
-    :ok = Handler.input(ev2 = Event.new("ack/queue", 2), pid)
-    :ok = Handler.input(ev3 = Event.new("ack/queue", 3), pid)
-    :ok = Handler.input(ev4 = Event.new("ack/queue", 4), pid)
+    :ok = Handler.input(Event.new("ack/queue", v1 = 1), pid)
+    :ok = Handler.input(Event.new("ack/queue", v2 = 2), pid)
+    :ok = Handler.input(Event.new("ack/queue", v3 = 3), pid)
+    :ok = Handler.input(Event.new("ack/queue", v4 = 4), pid)
 
     {:ok, s} = Handler.subscribe(pid)
 
-    assert_receive {^s, {:event, ackref,  ev1}}, 0
+    assert_receive {^s, {:event, ackref,  %{value: ^v1}}}, 0
     refute_receive {^s, {:event, _ackref, _ev}}, 0
 
     :ok = Handler.ack(s, ackref, pid)
-    assert_receive {^s, {:event, ackref,  ev2}}, 10
+    assert_receive {^s, {:event, ackref,  %{value: ^v2}}}, 10
     refute_receive {^s, {:event, _ackref, _ev}}, 0
 
     :ok = Handler.ack(s, ackref, pid)
-    assert_receive {^s, {:event, ackref,  ev3}}, 10
+    assert_receive {^s, {:event, ackref,  %{value: ^v3}}}, 10
     refute_receive {^s, {:event, _ackref, _ev}}, 0
 
     :ok = Handler.ack(s, ackref, pid)
-    assert_receive {^s, {:event, ackref,  ev4}}, 10
+    assert_receive {^s, {:event, _ackref,  %{value: ^v4}}}, 10
     refute_receive {^s, {:event, _ackref, _ev}}, 0
 
     refute_receive _

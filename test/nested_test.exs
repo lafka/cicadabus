@@ -38,4 +38,17 @@ defmodule CicadaBus.NestedTest do
 
     assert_receive {^ref, :done}
   end
+
+  defmodule ImportableHandler do
+    use CicadaBus.Handler, partial: true
+
+    defhandle "**", _ev, _opts do
+      :ok
+    end
+  end
+
+  test "application level include" do
+    # This ensures we don't start partial handlers by accident
+    assert_raise ArgumentError, ~r/.*can not be used directly$/, fn -> ImportableHandler.start_link("**") end
+  end
 end

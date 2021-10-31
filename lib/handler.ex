@@ -123,10 +123,12 @@ defmodule CicadaBus.Handler do
   @doc """
   Register a module a stream handler
   """
-  defmacro __using__(_) do
+  defmacro __using__(opts) do
     caller = __CALLER__.module
     Module.register_attribute(caller, :topics, persist: true, accumulate: true)
     Module.register_attribute(caller, :handlers, persist: true, accumulate: true)
+
+    partial? = true == opts[:partial]
 
     quote do
       use GenServer
@@ -172,6 +174,9 @@ defmodule CicadaBus.Handler do
 
         invalid = Keyword.drop(opts, valid_opts)
         cond do
+          unquote(partial?) ->
+            raise ArgumentError, message: "handler #{unquote(caller)} can not be used directly"
+
           [] != invalid ->
             keys = Keyword.keys(invalid)
             raise ArgumentError, message: "invalid keys '#{Enum.join(keys, "', '")}'"
@@ -672,11 +677,11 @@ defmodule CicadaBus.Handler do
 
     cond do
       nil == guarantee ->
-        {nil, nil, [], []}
+        {nil, [], []}
 
       # At least one was delivered, works for :any without
       :any == guarantee and [] != delivered ->
-        {nil, nil, [], []}
+        {nil, [], []}
 
         # We have a guarantee which has not been fulfilled. Wait for input
         # in the form of :DOWN messages, acknolwedgements or rejections
