@@ -172,25 +172,20 @@ defmodule CicadaBus.Handler do
 
         opts = Keyword.put_new(opts, :module, unquote(caller))
 
-        invalid = Keyword.drop(opts, valid_opts)
+        {opts, extra} = Keyword.split(opts, valid_opts)
         cond do
           unquote(partial?) ->
             raise ArgumentError, message: "handler #{unquote(caller)} can not be used directly"
 
-          [] != invalid ->
-            keys = Keyword.keys(invalid)
-            raise ArgumentError, message: "invalid keys '#{Enum.join(keys, "', '")}'"
-
           opts[:module] == nil or not is_atom(opts[:module])->
             raise ArgumentError, message: "option 'module' is null or not an atom"
-
 
           opts[:module] == nil ->
             raise ArgumentError, message: "missing key 'module'"
 
           true ->
-            genopts = Keyword.take(opts, ~w(name)a)
-            targetopts = Keyword.take(opts, ~w(module supervisor)a)
+            {genopts, targetopts} = Keyword.split(opts, ~w(name)a)
+            targetopts = [{:extra, extra} | targetopts]
             GenServer.start_link(opts[:module], [topic | targetopts], genopts)
         end
       end
@@ -291,27 +286,15 @@ defmodule CicadaBus.Handler do
 
 
   @doc """
-  Signal that the event was rejected by subscriber and should not be retried
-  """
-  def reject(ref, ackref, pid, opts \\ []) do
-    send pid, {ackref, ref, :reject}
-    :ok
-  end
-
-
-  @doc """
   Start a bare handler
   """
   def start_link(topic, opts \\ []) do
-    valid_opts = ~w(guarantee acknowledge prefix module supervisor name)a
 
-    invalid = Keyword.drop(opts, valid_opts)
-    if [] != invalid do
-        keys = Keyword.keys(invalid)
-        raise ArgumentError, message: "invalid keys '#{Enum.join(keys, "', '")}'"
-    end
+    valid_opts = ~w(extra prefix supervisor guarantee acknowledge)a
 
-    {opts, genopts} = Keyword.split(opts, valid_opts)
+    {genopts, opts} = Keyword.split(opts, ~w(name)a)
+    {opts, extra} = Keyword.split(opts, valid_opts)
+    opts = [{:extra, extra} | opts]
 
     GenServer.start_link(__MODULE__, [topic | opts], genopts)
   end
@@ -349,6 +332,7 @@ defmodule CicadaBus.Handler do
     {module, args} = Keyword.pop(args, :module, __MODULE__)
     # {prefix, args} = Keyword.pop(args, :prefix, "#{module}#")
     {supervisor, args} = Keyword.pop(args, :supervisor, nil)
+    {extra, args} = Keyword.pop(args, :extra, [])
 
     Logger.debug("starting topic #{topic} for module #{module}")
 
@@ -435,6 +419,7 @@ defmodule CicadaBus.Handler do
         module: module,
         acknowledge: args[:acknowledge],
         guarantee: args[:guarantee],
+        extra: extra,
         # The total queue
         queue: :pqueue.new(),
         subscribers: subworkers
@@ -648,7 +633,7 @@ defmodule CicadaBus.Handler do
           uncalled_handlers  = handlers -- delivered
 
           for {_, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
-            apply mod, fnname, [input, []]
+            apply mod, fnname, [input, state.extra]
           end
 
           delivered ++ uncalled_handlers

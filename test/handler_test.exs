@@ -63,7 +63,6 @@ defmodule CicadaBus.HandlerTest do
   end
 
 
-
   test "acknowledgement" do
     # Test that a given handler does not skip events with acknowledgement flag set.
 
@@ -96,5 +95,20 @@ defmodule CicadaBus.HandlerTest do
     refute_receive {^s, {:event, _ackref, _ev}}, 0
 
     refute_receive _
+  end
+
+  defmodule ExtraHandler do
+    use CicadaBus.Handler
+
+    defhandle "**", %{value: {pid, ref}}, opts do
+      send pid, {ref, opts}
+    end
+  end
+
+  test "pass options to handler" do
+    {:ok, pid} = ExtraHandler.start_link("**", additional: true)
+    :ok = ExtraHandler.input(Event.new("test", {self(), ref = make_ref()}), pid)
+
+    assert_receive {^ref, [additional: true]}
   end
 end
