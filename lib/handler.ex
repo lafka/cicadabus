@@ -239,8 +239,8 @@ defmodule CicadaBus.Handler do
   @doc """
   Peek into the queue, possibly at a given priority
   """
-  def peek(pid, priority \\ 0, opts \\ []) do
-    GenServer.call(pid, {:peek, priority}, opts[:timeout] || 5000)
+  def peek(pid, opts \\ []) do
+    GenServer.call(pid, :peek, opts[:timeout] || 5000)
   end
 
 
@@ -430,6 +430,8 @@ defmodule CicadaBus.Handler do
 
   @impl true
   def handle_call(:topic, _, %{topic: t} = state), do: {:reply, {:ok, t}, state}
+
+  def handle_call(:peek, _, state), do: {:reply, :pqueue.peek(state.queue), state}
 
   def handle_call(:subscribe, {pid, _} = from, state) do
     handle_call({:subscribe, pid}, from, state)
