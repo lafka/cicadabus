@@ -357,12 +357,25 @@ defmodule CicadaBus.Handler do
               m
           end
 
+        # Always ensure that the module is loaded, this is only usefull for
+        # dev/test environment as production should have loaded all code already.
+        # This can not be removed as we're using function_exported?/3 below
+        # which does automatically load the module
+        Code.ensure_loaded!(target)
+
         # Prepend prefix such that the same topic pattern does not conflict accross
         # multiple handlers. This means there's only one (module, topic)
         opts = [
           {:supervisor, supervisor},
           {:module, target}
         ]
+
+        opts =
+          case {extra[:registry], matchopts[:name]} do
+            {_, nil} -> opts
+            {nil, name} -> [{:name, name} | opts]
+            {r, name} -> [{:name, {:via, Registry, {r, name}}} | opts]
+          end
 
         cond do
           nil != supervisor ->
@@ -390,19 +403,17 @@ defmodule CicadaBus.Handler do
             {ref, %{pid: pid, topic: match, module: target, supervise: true}}
 
 
-          # Check if the same (topic, module, input) pair has been registered
-
           true ->
             {m, f, a} =
               if function_exported?(target, :child_spec, 1) do
-                %{start: {m, f, a}} = target.child_spec({match, opts})
+                %{start: {m, f, a}} = target.child_spec({match, opts ++ extra})
                 {m, f, a}
               else
                 {target, :start_link, []}
               end
 
-            Logger.info("  >> start #{match}, module: #{m}")
-            {:ok, pid} = apply m, f, a
+            Logger.info("  >> start #{match}/#{target}, #{m}.#{f}/#{length(a)}")
+            {:ok, pid} = apply(m, f, a)
             # add a monitor such that the
             ref = Process.monitor(pid)
             {ref, %{pid: pid, topic: match, matchspec: mspec, module: m}}
