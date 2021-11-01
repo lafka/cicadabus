@@ -74,7 +74,9 @@ defmodule CicadaBus.Handler do
           # The reason for delivery failure
           optional(:error) => term(),
           # the source of the queue which should be used for upstream acknowledgement
-          optional(:authority) => pid() | atom()
+          optional(:authority) => pid() | atom(),
+          # When the event was generated
+          optional(:received) => DateTime.t()
         }
 
 

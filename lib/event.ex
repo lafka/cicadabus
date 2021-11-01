@@ -24,7 +24,9 @@ defmodule CicadaBus.Event do
   end
 
   def new(topic, value, opts) do
+    {received, opts} = Keyword.pop(opts, :received, DateTime.utc_now())
     opts = Keyword.put_new(opts, :correlation_id, make_ref())
-    struct(__MODULE__, [{:topic, topic}, {:value, value} | opts])
+    s = struct(__MODULE__, [{:topic, topic}, {:value, value} | opts])
+    put_in(s, [Access.key(:meta), :received], received)
   end
 end
