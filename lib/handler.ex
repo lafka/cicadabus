@@ -340,7 +340,7 @@ defmodule CicadaBus.Handler do
 
     # Spawn the sub topics as children
     subworkers =
-      for {match, _regex, matchopts} <- module.topics(), into: %{} do
+      for mspec = {match, _regex, matchopts} <- module.topics(), into: %{} do
         {to, _matchopts} = Keyword.pop!(matchopts, :to)
         target =
           case to do
@@ -405,7 +405,7 @@ defmodule CicadaBus.Handler do
             {:ok, pid} = apply m, f, a
             # add a monitor such that the
             ref = Process.monitor(pid)
-            {ref, %{pid: pid, topic: match, module: m}}
+            {ref, %{pid: pid, topic: match, matchspec: mspec, module: m}}
         end
       end
 
@@ -615,14 +615,29 @@ defmodule CicadaBus.Handler do
     # Simple delivery via send/2
     event_ref = make_ref()
     awaiting_confirmation =
-      for {ref, target} <- new_targets do
+      for {ref, target} <- new_targets, reduce: [] do
+        acc ->
+          case target do
+            %{pid: pid} when is_pid(pid) ->
+              dispatch? =
+                # If it's a topic we check the topic is a match before sending.
+                # Normal subscribers will not have a matchspec
+                case target do
+                  %{matchspec: {_, _, _} = m} ->
+                    [] != match?(input, m, state.extra, [])
 
-        case target do
-          %{pid: pid} when is_pid(pid) ->
-            Logger.debug("deliver #{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
-            send(pid, {ref, {:event, event_ref, input}})
-            {ref, event_ref}
-        end
+                  _ ->
+                    true
+                end
+
+              if dispatch? do
+                Logger.debug("deliver #{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
+                send(pid, {ref, {:event, event_ref, input}})
+                [{ref, event_ref} | acc]
+              else
+                acc
+              end
+          end
       end
 
 
@@ -634,8 +649,10 @@ defmodule CicadaBus.Handler do
 
           uncalled_handlers  = handlers -- delivered
 
-          for {_, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
-            apply mod, fnname, [input, state.extra]
+          for mspec = {t, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
+            if [] != match?(input, mspec, state.extra, []) do
+              apply mod, fnname, [input, state.extra]
+            end
           end
 
           delivered ++ uncalled_handlers
