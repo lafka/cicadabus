@@ -132,8 +132,8 @@ defmodule CicadaBus.Handler do
 
     quote do
       use GenServer
+      import unquote(__MODULE__), only: [defhandle: 3, defhandle: 4, deftopic: 1, deftopic: 2]
       require Logger
-      import CicadaBus.Handler, except: [topics: 0]
 
       # @doc """
       # Start a new bus handler.
