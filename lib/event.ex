@@ -27,6 +27,6 @@ defmodule CicadaBus.Event do
     {received, opts} = Keyword.pop(opts, :received, DateTime.utc_now())
     opts = Keyword.put_new(opts, :correlation_id, make_ref())
     s = struct(__MODULE__, [{:topic, topic}, {:value, value} | opts])
-    put_in(s, [Access.key(:meta), :received], received)
+    %{s | meta: Map.merge(%{guarantee: nil, ttl: 10, received: received}, s.meta)}
   end
 end
