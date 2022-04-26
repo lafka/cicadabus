@@ -340,7 +340,7 @@ defmodule CicadaBus.Handler do
 
     # Spawn the sub topics as children
     subworkers =
-      for mspec = {match, _regex, matchopts} <- module.topics(), into: %{} do
+      for mspec = {match, _regex, matchopts} <- module.topics(extra), into: %{} do
         {to, _matchopts} = Keyword.pop!(matchopts, :to)
         target =
           case to do
