@@ -151,11 +151,12 @@ defmodule CicadaBus.Handler do
       @doc """
       Retrieve all the topics enabled for this bus
       """
-      def topics() do
+      def topics(opts \\ nil) do
         @topics
       end
 
       defoverridable topics: 0
+      defoverridable topics: 1
 
       defdelegate topic(pid, opts \\ []), to: CicadaBus.Handler
       defdelegate subscribe(pid, opts \\ []), to: CicadaBus.Handler
@@ -221,18 +222,11 @@ defmodule CicadaBus.Handler do
 
 
   @doc """
-  A bare handler does not have any topics
+  Retrieve all topics of worker. Bare handlers does not have any
+  topics and will return a emtpy list
   """
-  def topics() do
+  def topics(_opts \\ []) do
     []
-  end
-
-
-  @doc """
-  Retrieve all topics of worker
-  """
-  def topics(pid, opts \\ []) do
-    GenServer.call(pid, :topics, opts[:timeout] || 5000)
   end
 
 
@@ -340,7 +334,15 @@ defmodule CicadaBus.Handler do
 
     # Spawn the sub topics as children
     subworkers =
-      for mspec = {match, _regex, matchopts} <- module.topics(extra), into: %{} do
+      for mspec <- module.topics(extra), into: %{} do
+        {match, _regex, matchopts} = case mspec do
+          {_, _, _} = r ->
+            r
+          mod when is_atom(mod) ->
+            {"**", nil, [to: mod]}
+
+        end
+
         {to, _matchopts} = Keyword.pop!(matchopts, :to)
         target =
           case to do
