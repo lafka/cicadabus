@@ -242,7 +242,8 @@ defmodule CicadaBus.Handler do
   Subscribe to this worker
   """
   def subscribe(pid, opts \\ []) do
-    GenServer.call(pid, :subscribe, opts[:timeout] || 5000)
+    {genopts, opts} = Keyword.split(opts, [:timeout])
+    GenServer.call(pid, {:subscribe, self(), opts}, genopts[:timeout] || 5000)
   end
 
 
@@ -250,7 +251,8 @@ defmodule CicadaBus.Handler do
   Attach a specific process to a server
   """
   def attach(upstream, downstream, opts \\ []) do
-    GenServer.call(upstream, {:subscribe, downstream}, opts[:timeout] || 5000)
+    {genopts, opts} = Keyword.split(opts, [:timeout])
+    GenServer.call(upstream, {:subscribe, downstream, opts}, genopts[:timeout] || 5000)
   end
 
   @doc """
@@ -362,7 +364,9 @@ defmodule CicadaBus.Handler do
         # Always ensure that the module is loaded, this is only usefull for
         # dev/test environment as production should have loaded all code already.
         # This can not be removed as we're using function_exported?/3 below
-        # which does automatically load the module
+        # which does automatically load the module. When running tests
+        # for a "parent" project (ie tnest) this will cause failure since
+        # the sub project is not loaded (and we don't know how to load it).
         Code.ensure_loaded!(target)
 
         # Prepend prefix such that the same topic pattern does not conflict accross
@@ -446,24 +450,40 @@ defmodule CicadaBus.Handler do
 
   def handle_call(:peek, _, state), do: {:reply, :pqueue.peek(state.queue), state}
 
-  def handle_call(:subscribe, {pid, _} = from, state) do
-    handle_call({:subscribe, pid}, from, state)
-  end
 
-  def handle_call({:subscribe, pid}, _from, state) do
+  def handle_call({:subscribe, pid, opts}, _from, state) do
+    # Set topic and matchspec immediately
+    opts =
+      case opts[:topic] do
+        t when t in [nil, "**"] ->
+           Keyword.merge(opts, topic: "**", matchspec: {"**", nil, []})
+
+        t ->
+          Keyword.merge(opts, topic: t, matchspec: {t, PathGlob.compile(t), []})
+      end
+
+    topic = opts[:topic]
+
     case Enum.find(state.subscribers, fn {_ref, %{pid: p}} -> p == pid end) do
       nil ->
         ref = Process.monitor(pid)
 
         Logger.info("Subscribing #{inspect(pid)} to '#{state.topic}', ref := #{inspect(ref)}")
 
-        newstate = sync_new_subscriber(state, {ref, pid})
+        newstate =
+          state
+          |> put_new_subscriber({ref, pid}, opts)
+          |> sync_events()
 
         {:reply, {:ok, ref}, newstate}
 
-      {ref, pid} ->
+      {ref, %{pid: pid, topic: ^topic}} ->
         Logger.debug("already subscribed #{inspect(pid)} to '#{state.topic}, ref := #{inspect pid}'")
         {:reply, {:ok, ref}, state}
+
+      {ref, %{pid: pid, topic: old_topic}} ->
+        Logger.debug("resubscribing #{inspect(pid)} from '#{old_topic} to #{topic}, ref := #{inspect pid}'")
+        {:reply, {:ok, ref}, put_new_subscriber(state, {ref, pid}, opts)}
     end
   end
 
@@ -530,17 +550,18 @@ defmodule CicadaBus.Handler do
     |> set_default_guarantee(state.guarantee)
     |> set_default_ack(state.acknowledge)
 
+
     cond do
       not state.match.(ev, []) ->
         Logger.debug("drop #{Enum.join(ev.topic, "/")} from unnmatched '#{state.topic}'")
         {:drop, state}
 
       not pending?(state) ->
-        Logger.debug("accept  #{Enum.join(ev.topic, "/")} on '#{state.topic}' -> output")
+        Logger.debug("accept  #{state.module}/#{Enum.join(ev.topic, "/")} on '#{state.topic}' -> output")
         {:ok, %{state | event: output({ev, [], []}, state)}}
 
       true ->
-        Logger.debug("accept #{Enum.join(ev.topic, "/")} on '#{state.topic}' -> queue")
+        Logger.debug("accept #{state.module}/#{Enum.join(ev.topic, "/")} on '#{state.topic}' -> queue")
         {:ok, queue_event(ev, state)}
     end
   end
@@ -606,18 +627,15 @@ defmodule CicadaBus.Handler do
   end
 
 
-  defp sync_new_subscriber(state, {ref, pid}) do
-    newstate = %{state | subscribers: Map.put(state.subscribers, ref, %{pid: pid})}
-
-    case state.event do
-      {nil, _, _} ->
-        newstate
-
-      # We have a event and it's waiting to be consumed
-      {_event, [], []} = e ->
-        %{newstate | event: output(e, newstate)}
-    end
+  defp put_new_subscriber(state, {ref, pid}, opts) do
+    substate = Map.new([{:pid, pid} | opts])
+    %{state | subscribers: Map.put(state.subscribers, ref, substate)}
   end
+
+  defp sync_events(%{event: {nil, _, _}} = state),
+    do: state
+  defp sync_events(%{event: {_events, [], []} = e} = state),
+    do: %{state | event: output(e, state)}
 
 
   defp output({nil, _delivered, _pending} = null_event, _state), do: null_event
@@ -625,10 +643,10 @@ defmodule CicadaBus.Handler do
   defp output({input, delivered, pending}, state) do
     # Deliver only to these subscribers
     new_targets = Map.drop(state.subscribers, delivered ++ pending)
-    Logger.debug("output  #{Enum.join(input.topic, "/")} to #{map_size new_targets} subscriber")
+    Logger.debug("output  #{state.module}/#{Enum.join(input.topic, "/")} to #{map_size new_targets} subscriber")
 
     # Simple delivery via send/2
-    event_ref = make_ref()
+    event_ref = input.correlation_id
     awaiting_confirmation =
       for {ref, target} <- new_targets, reduce: [] do
         acc ->
@@ -646,7 +664,7 @@ defmodule CicadaBus.Handler do
                 end
 
               if dispatch? do
-                Logger.debug("deliver #{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
+                Logger.debug("deliver #{state.module}/#{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
                 send(pid, {ref, {:event, event_ref, input}})
                 [{ref, event_ref} | acc]
               else
@@ -664,7 +682,7 @@ defmodule CicadaBus.Handler do
 
           uncalled_handlers  = handlers -- delivered
 
-          for mspec = {t, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
+          for mspec = {_topic, _, [to: {mod, fnname, _}]} <- uncalled_handlers do
             if [] != match?(input, mspec, state.extra, []) do
               apply mod, fnname, [input, state.extra]
             end
@@ -717,26 +735,29 @@ defmodule CicadaBus.Handler do
   end
 
 
+  # If match topic is exactly the same or "**" we know it's a match without checking
+  # the regex
+  defp match?(%Event{topic: topic}, {topic, nil, _matchopts}, _opts, acc) do
+    [topic | acc]
+  end
+  defp match?(%Event{topic: topic}, {"**", _, _matchopts}, _opts, acc) do
+    [topic | acc]
+  end
+  defp match?(%Event{}, {_tmatch, nil, _matchopts}, _opts, acc) do
+    acc
+  end
   defp match?(%Event{topic: topic} = event, {match, regex, matchopts}, opts, acc) do
     if String.match?(Enum.join(topic, "/"), regex) do
-      {mod, fun, args} =
-        case matchopts[:to] do
-          mod when is_atom(mod) ->
-            {mod, :cast, [event, opts]}
-
-          {mod, fun} ->
-            {mod, fun, [event, opts]}
-
-          {mod, fun, args} ->
-            {mod, fun, args ++ [event, opts]}
-        end
-
       cond do
-        true == matchopts[:check] and nil != apply(mod, fun, args) ->
-          [match | acc]
-
         true != matchopts[:check] ->
           [match | acc]
+
+        true == matchopts[:check] ->
+          if apply_match_mfa(matchopts[:to], event, opts) do
+            [match | acc]
+          else
+            acc
+          end
 
         true ->
           acc
@@ -745,4 +766,13 @@ defmodule CicadaBus.Handler do
       acc
     end
   end
+
+  defp apply_match_mfa(mod, event, opts) when is_atom(mod),
+    do: apply(mod, :cast, [event, opts])
+  defp apply_match_mfa({mod, fun}, event, opts),
+    do: apply(mod, fun, [event, opts])
+  defp apply_match_mfa({mod, fun, args}, event, opts),
+    do: apply(mod, fun, args ++ [event, opts])
+  defp apply_match_mfa(nil, _event, _opts),
+    do: nil
 end

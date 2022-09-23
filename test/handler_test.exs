@@ -31,6 +31,31 @@ defmodule CicadaBus.HandlerTest do
   end
 
 
+  test "subscribe to subset" do
+    # Allow subscribing with a topic filter
+    {:ok, pid} = Handler.start_link("**")
+
+    assert {:ok, state} = Handler.subscribe(pid, topic: "a/b")
+    :ok = Handler.input(accepted = Event.new("a/b", :ab), pid)
+    :ok = Handler.input(rejected = Event.new("unmatched", :ab), pid)
+
+    assert_receive {^state, {:event, _ackref, ^accepted}}
+    refute_receive {_, {:event, _ackref, ^rejected}}
+
+    assert :ok = Handler.unsubscribe state, pid
+  end
+
+  test "deduplicate subscription" do
+     {:ok, pid} = Handler.start_link("**")
+    assert {:ok, state} = Handler.subscribe(pid)
+    assert {:ok, other} = Handler.subscribe(pid)
+
+    :ok = Handler.input(ev = Event.new("test/`topic", :value), pid)
+
+    assert_receive {^state, {:event, _ackref, ^ev}}
+    refute_receive {^other, {:event, _ackref, ^ev}}
+  end
+
   test "chain handlers" do
     # This setup can be used along with registered name and Supervisor
     # to create a processing pipeline based on events
@@ -110,5 +135,6 @@ defmodule CicadaBus.HandlerTest do
     :ok = ExtraHandler.input(Event.new("test", {self(), ref = make_ref()}), pid)
 
     assert_receive {^ref, [additional: true]}
+    refute_receive _
   end
 end
