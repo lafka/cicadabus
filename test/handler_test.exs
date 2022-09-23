@@ -75,6 +75,22 @@ defmodule CicadaBus.HandlerTest do
   end
 
 
+  test "wrap output event" do
+    # When integrating with other libraries one may need to transform the event
+    # by wrapping/packing into a different term.
+    #
+    # This is only true when dispatching to runtime processes, not to handlers
+
+    {:ok, pid} = Handler.start_link("**")
+    fun = fn(ev) -> {:wrapped, ev} end
+    assert {:ok, state} = Handler.subscribe(pid, transform: fun)
+
+    :ok = Handler.input(ev = Event.new("test/`topic", :value), pid)
+
+    assert_receive {:wrapped, {^state, {:event, _ackref, ^ev}}}
+  end
+
+
   test "deliver upon subscription" do
     # In case there's a event with some delivery guarantee it will be
     # delivered once the first subscriber connects

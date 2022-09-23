@@ -651,7 +651,7 @@ defmodule CicadaBus.Handler do
       for {ref, target} <- new_targets, reduce: [] do
         acc ->
           case target do
-            %{pid: pid} when is_pid(pid) ->
+            %{pid: pid} = opts when is_pid(pid) ->
               dispatch? =
                 # If it's a topic we check the topic is a match before sending.
                 # Normal subscribers will not have a matchspec
@@ -665,7 +665,8 @@ defmodule CicadaBus.Handler do
 
               if dispatch? do
                 Logger.debug("deliver #{state.module}/#{Enum.join(input.topic, "/")} to #{inspect pid} with ref #{inspect event_ref}")
-                send(pid, {ref, {:event, event_ref, input}})
+                event = maybe_wrap_output({ref, {:event, event_ref, input}}, opts[:transform])
+                send(pid, event)
                 [{ref, event_ref} | acc]
               else
                 acc
@@ -733,6 +734,10 @@ defmodule CicadaBus.Handler do
         end
     end
   end
+
+
+  defp maybe_wrap_output(ev, nil), do: ev
+  defp maybe_wrap_output(ev, fun), do: fun.(ev)
 
 
   # If match topic is exactly the same or "**" we know it's a match without checking
