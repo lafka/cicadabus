@@ -110,15 +110,26 @@ defmodule CicadaBus.Handler do
 
     Module.put_attribute(module, :handlers, {t, regex, to: {module, fnname, []}})
 
+    # in case of pattern matching we add a fallback so we don't crash on
+    # function clause error. In the case the event is a simple variable match
+    # there's no need for fallback as it will only trigger a warning
+    fallback =
+      case event do
+        {name, _, nil} when is_atom(name) -> nil
+        _ ->
+          quote do
+            def unquote(fnname)(_, _)  do
+              nil
+            end
+          end
+      end
+
     quote do
       def unquote(fnname)(unquote(event), unquote(opts)) do
           unquote(block)
       end
-      # in case of pattern matching we add a fallback so we don't crash on
-      # function clause error
-      def unquote(fnname)(_, _)  do
-        nil
-      end
+
+      unquote(fallback)
     end
   end
 
